@@ -3,46 +3,56 @@ import sharp from 'sharp';
 import opentype from 'opentype.js';
 import LineBreaker from 'linebreak';
 
-const roboto = opentype.loadSync('Roboto/Roboto-Regular.ttf');
-//const path = roboto.getPath("Dies ist ein ziemlich langer Text. Ich will nur mal sehen, ob das auch für eine ganze Textzeile reichen würde.", 50,80,80).toSVG().replace('<path', '<path class="test"');
+// const roboto = opentype.loadSync('./KMKDSP__.ttf');
+const roboto = opentype.loadSync('./Roboto/Roboto-Regular.ttf');
+
 
 function renderText(text: string, fontSize: number, lineHeight: number, width: number, left: number, top: number) {
   const breaker = new LineBreaker(text);
-  let lastBreak = 0;
-  let lastLine = 0;
-  let bk;
 
-  const startY = top + fontSize - 16 * roboto.ascender/roboto.unitsPerEm;
-
-  console.log("starty", startY)
-
+  const startY = top + fontSize * roboto.ascender/roboto.unitsPerEm;
   const paths: string[] = [];
-  let oldline = "";
 
-  while (bk = breaker.nextBreak()) {
-    // get the string between the last break and this one
-    const currentLine = text.slice(lastLine, bk.position);
-    console.log(currentLine);
-    //TODO: choose font
+  function addPath(line: string) {
+//    console.log("pushing ", line);
+    const path: string = roboto.getPath(line, left, startY + paths.length  * lineHeight, fontSize).toSVG(2).replace('<path', '<path class="text"');
+    paths.push(path);
 
-    if (roboto.getAdvanceWidth(currentLine, fontSize) > width) {
-      console.log("*** pushing ", oldline);
-      const path: string = roboto.getPath(oldline, left, startY + paths.length  * lineHeight, fontSize).toSVG(2).replace('<path', '<path class="text"');
-      paths.push(path);
-      oldline = currentLine;
-      lastLine = lastBreak;
-    }
-    else {
-      oldline = currentLine;
-    }
-
-    lastBreak = bk.position;
   }
-  const path: string = roboto.getPath(oldline, left, startY + paths.length  * lineHeight, fontSize).toSVG(2).replace('<path', '<path class="text"');
-  paths.push(path);
 
+  let lastPosition = 0;
+  let lastValidBreak = 0;
+  let currentWidth = 0;
+  let position: number;
 
-  const height = startY + (paths.length-1) * lineHeight;
+  while (position = breaker.nextBreak()?.position) {
+      const substring = text.slice(lastPosition, position); // Using slice instead of substring
+      currentWidth = roboto.getAdvanceWidth(substring, fontSize);
+
+      if (currentWidth > width) {
+          // If we've exceeded the max width, split at the last valid break point
+          // and reset the lastPosition and currentWidth to start from the last valid break
+          if (lastValidBreak === lastPosition) { // Handle case where a single segment exceeds maxWidth
+              addPath(substring); // Add the oversized segment as is or handle differently
+              lastPosition = position; // Move past this segment
+          } else {
+              addPath(text.slice(lastPosition, lastValidBreak));
+              lastPosition = lastValidBreak; // Start next part from the last valid break
+              continue; // Skip the increment to reevaluate the width from the last valid break
+          }
+      }
+
+      lastValidBreak = position; // Update last valid break to current position
+  }
+
+  // Add the last part if there's any remaining text
+  if (lastPosition < text.length) {
+      addPath(text.slice(lastPosition));
+  }
+
+  console.log(paths.length);
+
+  const height =  fontSize * (roboto.ascender/roboto.unitsPerEm -  roboto.descender/roboto.unitsPerEm) + (paths.length-1) * lineHeight;
 
   return {
     paths,
@@ -51,40 +61,65 @@ function renderText(text: string, fontSize: number, lineHeight: number, width: n
 
 }
 
+
 type TextFieldOptions = {
   width: number,
   fontSize: number,
   lineHeight: number,
   styleBox: string,
   styleText: string,
-  marginVertical: number,
-  marginHorizontal: number
+  paddingX?: number,
+  paddingY?: number,
+  marginY: number,
+  marginX: number
 }
 
 
 function buildSvg(text: string, options: TextFieldOptions) {
-  const boxWidth = options.width - 20;
-  const textWidth = boxWidth - options.marginHorizontal * 2;
-  const textLeft = 10 + options.marginHorizontal;
-  const textTop = 10 + options.marginVertical;
+
+  console.log("options.paddingX", options.paddingX);
+  console.log("options.marginX", options.marginX);
+
+  const boxWidth = options.width - (options.marginX || 0)*2;
+  const textWidth = boxWidth - (options.paddingX || 0) * 2;
+  const boxLeft = (options.marginX || 0);
+  const boxTop = (options.marginY || 0);
+  const textLeft = boxLeft + (options.paddingX || 0);
+  const textTop = boxTop + (options.paddingY || 0);
 
   const {paths, height : textHeight} = renderText(text, options.fontSize, options.lineHeight, textWidth, textLeft, textTop);
-  const boxHeight = textHeight + options.marginVertical * 2;
-  const svgHeight = boxHeight + 20;
+  const boxHeight = textHeight + (options.paddingY || 0) * 2;
+  const svgHeight = boxHeight + (options.marginY || 0) *2;
+
+
+  // Debugging geometrics
+  // const startY = textTop + options.fontSize * roboto.ascender/roboto.unitsPerEm;
+  // const l2 = startY + options.lineHeight;
+  // const l3 = l2 + options.lineHeight//roboto.descender/(-16);
+  // console.log("" + startY + ", " + l2 + ", " + l3) 
+
+  /* Debugging lines for text box
+      <line x1="0" y1="${startY}" x2="${options.width}" y2="${startY}" stroke="red" />
+      <line x1="0" y1="${l2}" x2="${options.width}" y2="${l2}" stroke="red" />
+      <line x1="0" y1="${l3}" x2="${options.width}" y2="${l3}" stroke="red" />      
+      <rect x="${textLeft}" y="${textTop}" width="${textWidth}" height="${textHeight}" stroke="green" fill="none" />
+  */
 
   return `<svg width="${options.width}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">
-    <style>
+  <defs>
+  <radialGradient id="0" cx="50%" cy="50%" r="50%" >
+    <stop offset="0%" style="stop-color:rgb(245,230,147);stop-opacity:1.00" />
+    <stop offset="40%" style="stop-color:rgb(255,233,90);stop-opacity:1.00" />
+    <stop offset="80%" style="stop-color:rgb(227,204,92);stop-opacity:1.00" />
+  </radialGradient>
+  </defs>
+  <style>
       .text { ${options.styleText} }
       .box { ${options.styleBox} }
-      .tb {
-        stroke: #00AA00; 
-        fill: none;
-      }
       </style>
-      <rect x="${options.marginHorizontal}" y="${options.marginVertical}" width="${boxWidth}" height="${boxHeight}" class="box"/>
-      <rect x="${textLeft}" y="${textTop}" width="${textWidth}" height="${textHeight}" class="tb" />
-      ${paths.join()}
-    </svg>`
+        <rect x="${boxLeft}" y="${boxTop}" width="${boxWidth}" height="${boxHeight}" class="box"/>
+        ${paths.join()}
+    </svg>`;
 }
 
 
@@ -92,6 +127,7 @@ async function renderTextBox(text: string, options: TextFieldOptions) {
   const svg = buildSvg(text, options);
 
   const image = await sharp("/Users/tiberius/ai/img/bst_4/fireman_gross.png");
+  //const image = await sharp("/Users/tiberius/ai/img/bst_4/tina_arielle.png");
 
   image.composite([{
     input: Buffer.from(svg),
@@ -101,65 +137,27 @@ async function renderTextBox(text: string, options: TextFieldOptions) {
     .toFile('./test.png');
 }
 
-renderTextBox("Dies ist ein Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überhaupt etwas passiert...", {
-  width: 800,
+renderTextBox("Dies ist ein Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überaupt etwas passgjyiert...", {
+  width: 2000,
   fontSize: 80,
   lineHeight: 96,
-  styleBox: "stroke: #000000; filter: drop-shadow( 5px 5px 5px rgba(0, 0, 0, .5)); fill: #dddddd; rx:5; ry:5;",
+  styleBox: "stroke: #000000; filter: drop-shadow( 10px 10px 8px rgba(0, 0, 0, .5)); fill: url(#0); rx:10; ry:10;",
   styleText: "fill: black",
-  marginHorizontal: 10,
-  marginVertical: 10
+  paddingX: 48,
+  paddingY: 48,
+  marginX: 10,
+  marginY: 10
 });
 
 
-// async function getMetadata() {
-//   var lorem = 'Dies ist ein Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überhaupt etwas passiert...';
-//   var breaker = new LineBreaker(lorem);
-//   var last = 0;
-//   var lastLine = 0;
-//   var bk;
-
-
-//   const lines = []
-//   let oldline
-
-//   while (bk = breaker.nextBreak()) {
-//     // get the string between the last break and this one
-//     var currentLine = lorem.slice(lastLine, bk.position);
-//     console.log(currentLine);
-//     const width = roboto.getAdvanceWidth(currentLine, 80);
-//     console.log(width);
-
-//     if (width > 760) {
-//       console.log("*** pushing ", oldline)
-//       lines.push(oldline.trim())
-//       oldline = currentLine;
-//       lastLine = last
-//     }
-//     else {
-//       oldline = currentLine
-//     }
-
-//     last = bk.position;
-//   }
-//   if (oldline.length) lines.push(oldline)
-
-
-//   const lineHeight = 100
-
-//   const paths = []
-
-//   for (let i = 0; i < lines.length; i++) {
-//     const path = roboto.getPath(lines[i], 20, (i+1) * lineHeight, 80).toSVG().replace('<path', '<path class="test"');
-//     paths.push(path)
-//   }
-
-//   const height = (lines.length * lineHeight + 40).toString();
-
-//   console.log(height);
-
-
-//   const metadata = 
-// }
-
-// getMetadata();
+// renderTextBox("Dies ist ein Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überaupt etwas passgjyiert...", {
+//   width: 500,
+//   fontSize: 20,
+//   lineHeight: 24,
+//   styleBox: "stroke: #000000; filter: drop-shadow( 3px 3px 2px rgba(0, 0, 0, .5)); fill: url(#0); rx:3; ry:3;",
+//   styleText: "fill: black",
+//   paddingX: 15,
+//   paddingY: 15,
+//   marginX: 3,
+//   marginY: 3
+// });
