@@ -2,20 +2,30 @@
 import sharp from 'sharp';
 import opentype from 'opentype.js';
 import LineBreaker from 'linebreak';
+import fs from "fs";
 
-// const roboto = opentype.loadSync('./KMKDSP__.ttf');
-const roboto = opentype.loadSync('./Roboto/Roboto-Regular.ttf');
+const FONT_PATH = "./"; // process.env.FONT_PATH!;
+
+const fontCache = new Map<string, opentype.Font>();
+
+function getFont(name: string) {
+  if (!fontCache.has(name)) {
+    fontCache.set(name, opentype.loadSync(FONT_PATH + name));
+  }
+  return fontCache.get(name)!;
+}
 
 
-function renderText(text: string, fontSize: number, lineHeight: number, width: number, left: number, top: number) {
+function renderText(text: string, fontName: string, fontSize: number, lineHeight: number, width: number, left: number, top: number) {
   const breaker = new LineBreaker(text);
 
-  const startY = top + fontSize * roboto.ascender/roboto.unitsPerEm;
+  const font = getFont(fontName);
+  const startY = top + fontSize * font.ascender/font.unitsPerEm;
   const paths: string[] = [];
 
   function addPath(line: string) {
 //    console.log("pushing ", line);
-    const path: string = roboto.getPath(line, left, startY + paths.length  * lineHeight, fontSize).toSVG(2).replace('<path', '<path class="text"');
+    const path: string = font.getPath(line, left, startY + paths.length  * lineHeight, fontSize).toSVG(2).replace('<path', '<path class="text"');
     paths.push(path);
 
   }
@@ -27,7 +37,7 @@ function renderText(text: string, fontSize: number, lineHeight: number, width: n
 
   while (position = breaker.nextBreak()?.position) {
       const substring = text.slice(lastPosition, position); // Using slice instead of substring
-      currentWidth = roboto.getAdvanceWidth(substring, fontSize);
+      currentWidth = font.getAdvanceWidth(substring, fontSize);
 
       if (currentWidth > width) {
           // If we've exceeded the max width, split at the last valid break point
@@ -52,7 +62,7 @@ function renderText(text: string, fontSize: number, lineHeight: number, width: n
 
   console.log(paths.length);
 
-  const height =  fontSize * (roboto.ascender/roboto.unitsPerEm -  roboto.descender/roboto.unitsPerEm) + (paths.length-1) * lineHeight;
+  const height =  fontSize * (font.ascender/font.unitsPerEm -  font.descender/font.unitsPerEm) + (paths.length-1) * lineHeight;
 
   return {
     paths,
@@ -61,35 +71,41 @@ function renderText(text: string, fontSize: number, lineHeight: number, width: n
 
 }
 
+type TextBoxPosition = "NW" | "N" | "NE" | "SW" | "S" | "SE"
+type TextBoxWidth = 1 | 2 | 3 | 4
+
 
 type TextFieldOptions = {
-  width: number,
+  position: TextBoxPosition,
+  width: TextBoxWidth,
+  fontName: string,
   fontSize: number,
   lineHeight: number,
+  defs?: string,
   styleBox: string,
   styleText: string,
   paddingX?: number,
   paddingY?: number,
-  marginY: number,
-  marginX: number
+  marginY?: number,
+  marginX?: number
 }
 
 
-function buildSvg(text: string, options: TextFieldOptions) {
+function buildSvg(text: string, width: number, options: TextFieldOptions) {
 
   console.log("options.paddingX", options.paddingX);
   console.log("options.marginX", options.marginX);
 
-  const boxWidth = options.width - (options.marginX || 0)*2;
+  const boxWidth = width - (options.marginX || 0)*2;
   const textWidth = boxWidth - (options.paddingX || 0) * 2;
   const boxLeft = (options.marginX || 0);
   const boxTop = (options.marginY || 0);
   const textLeft = boxLeft + (options.paddingX || 0);
   const textTop = boxTop + (options.paddingY || 0);
 
-  const {paths, height : textHeight} = renderText(text, options.fontSize, options.lineHeight, textWidth, textLeft, textTop);
+  const {paths, height : textHeight} = renderText(text, options.fontName, options.fontSize, options.lineHeight, textWidth, textLeft, textTop);
   const boxHeight = textHeight + (options.paddingY || 0) * 2;
-  const svgHeight = boxHeight + (options.marginY || 0) *2;
+  const svgHeight = Math.ceil(boxHeight + (options.marginY || 0) *2);
 
 
   // Debugging geometrics
@@ -99,20 +115,14 @@ function buildSvg(text: string, options: TextFieldOptions) {
   // console.log("" + startY + ", " + l2 + ", " + l3) 
 
   /* Debugging lines for text box
-      <line x1="0" y1="${startY}" x2="${options.width}" y2="${startY}" stroke="red" />
-      <line x1="0" y1="${l2}" x2="${options.width}" y2="${l2}" stroke="red" />
-      <line x1="0" y1="${l3}" x2="${options.width}" y2="${l3}" stroke="red" />      
+      <line x1="0" y1="${startY}" x2="${width}" y2="${startY}" stroke="red" />
+      <line x1="0" y1="${l2}" x2="${width}" y2="${l2}" stroke="red" />
+      <line x1="0" y1="${l3}" x2="${width}" y2="${l3}" stroke="red" />      
       <rect x="${textLeft}" y="${textTop}" width="${textWidth}" height="${textHeight}" stroke="green" fill="none" />
   */
 
-  return `<svg width="${options.width}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-  <radialGradient id="0" cx="50%" cy="50%" r="50%" >
-    <stop offset="0%" style="stop-color:rgb(245,230,147);stop-opacity:1.00" />
-    <stop offset="40%" style="stop-color:rgb(255,233,90);stop-opacity:1.00" />
-    <stop offset="80%" style="stop-color:rgb(227,204,92);stop-opacity:1.00" />
-  </radialGradient>
-  </defs>
+  const svg = `<svg width="${width}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">
+  <defs>${options.defs || ""}</defs>
   <style>
       .text { ${options.styleText} }
       .box { ${options.styleBox} }
@@ -120,44 +130,88 @@ function buildSvg(text: string, options: TextFieldOptions) {
         <rect x="${boxLeft}" y="${boxTop}" width="${boxWidth}" height="${boxHeight}" class="box"/>
         ${paths.join()}
     </svg>`;
+
+  return {
+    svg: svg,
+    height: svgHeight
+  };
 }
 
 
-async function renderTextBox(text: string, options: TextFieldOptions) {
-  const svg = buildSvg(text, options);
+async function renderTextBox(image: sharp.Sharp, text: string, options: TextFieldOptions) {
+  const [imageWidth, imageHeight] = await image.metadata().then(m => [m.width!, m.height!]);
+  console.log("size." , imageWidth," x ", imageHeight);
 
-  const image = await sharp("/Users/tiberius/ai/img/bst_4/fireman_gross.png");
-  //const image = await sharp("/Users/tiberius/ai/img/bst_4/tina_arielle.png");
+  const width = Math.trunc(imageWidth / options.width);
+  console.log("width: ", width);
 
-  image.composite([{
+  const { svg, height } = buildSvg(text, width, options);
+
+  let top, left;
+
+  switch(options.position) {
+    case "NW": top = 0; left = 0; break;
+    case "N": top = 0; left = Math.trunc((imageWidth - width) / 2); break;
+    case "NE": top = 0; left = (imageWidth - width); break;
+    case "SW": top = imageHeight - height; left = 0; break;
+    case "S": top = imageHeight - height; left = Math.trunc((imageWidth - width) / 2); break;
+    case "SE": top = imageHeight - height; left = (imageWidth - width); break;
+  }
+ 
+  return image.composite([{
     input: Buffer.from(svg),
-    top: 20,
-    left: 20,
-  }])
-    .toFile('./test.png');
+    top: top,
+    left: left,
+  }]).toBuffer();
 }
 
-renderTextBox("Dies ist ein Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überaupt etwas passgjyiert...", {
-  width: 2000,
-  fontSize: 80,
-  lineHeight: 96,
-  styleBox: "stroke: #000000; filter: drop-shadow( 10px 10px 8px rgba(0, 0, 0, .5)); fill: url(#0); rx:10; ry:10;",
-  styleText: "fill: black",
-  paddingX: 48,
-  paddingY: 48,
-  marginX: 10,
-  marginY: 10
-});
 
+(async () => {
 
-// renderTextBox("Dies ist ein Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überaupt etwas passgjyiert...", {
-//   width: 500,
-//   fontSize: 20,
-//   lineHeight: 24,
-//   styleBox: "stroke: #000000; filter: drop-shadow( 3px 3px 2px rgba(0, 0, 0, .5)); fill: url(#0); rx:3; ry:3;",
-//   styleText: "fill: black",
-//   paddingX: 15,
-//   paddingY: 15,
-//   marginX: 3,
-//   marginY: 3
-// });
+  const image = sharp("/Users/tiberius/ai/img/bst_4/fireman_gross.png");
+  //const image = await sharp("/Users/tiberius/ai/img/bst_4/tina_arielle.png");
+  
+  const buffer = renderTextBox(image, "Dies ist ein Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überaupt etwas passgjyiert...", {
+    position: "SE",
+    width: 3,
+//    fontName: "Roboto/Roboto-Regular.ttf",
+    fontName: "KMKDSP__.ttf",
+    fontSize: 80,
+    lineHeight: 96,
+    defs: `
+      <radialGradient id="0" cx="50%" cy="50%" r="50%" >
+        <stop offset="0%" style="stop-color:rgb(245,230,147);stop-opacity:1.00" />
+        <stop offset="40%" style="stop-color:rgb(255,233,90);stop-opacity:1.00" />
+        <stop offset="80%" style="stop-color:rgb(227,204,92);stop-opacity:1.00" />
+      </radialGradient> 
+    `.trim(),
+    styleBox: "stroke: #000000; filter: drop-shadow( 10px 10px 8px rgba(0, 0, 0, .5)); fill: url(#0); rx:10; ry:10;",
+    styleText: "fill: black",
+    paddingX: 48,
+    paddingY: 48,
+    marginX: 36,
+    marginY: 36
+  });
+  
+  
+  // renderTextBox("Dies ist ein Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überaupt etwas passgjyiert...", {
+  //   width: 500,
+  //   fontName: "Roboto/Roboto-Regular.ttf",
+  //   fontSize: 20,
+  //   lineHeight: 24,
+  //   styleBox: "stroke: #000000; filter: drop-shadow( 3px 3px 2px rgba(0, 0, 0, .5)); fill: url(#0); rx:3; ry:3;",
+  //   styleText: "fill: black",
+  //   paddingX: 15,
+  //   paddingY: 15,
+  //   marginX: 8,
+  //   marginY: 8
+  // });
+  
+  try {
+    fs.writeFileSync('test.png', await buffer);
+    console.log('The file has been saved!');
+  } catch (err) {
+    console.error('Error writing file:', err);
+  }
+
+})();
