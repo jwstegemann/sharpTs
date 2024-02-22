@@ -4,6 +4,7 @@ import opentype from 'opentype.js';
 import LineBreaker from 'linebreak';
 import fs from "fs";
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+const parse = require("json-templates")
 
 const AWS_REGION = "us-east-1";
 
@@ -66,41 +67,93 @@ async function renderText(text: string, fontName: string, fontSize: number, line
   const paths: string[] = [];
 
   function addPath(line: string) {
-      //    console.log("pushing ", line);
+      console.log("pushing ", line);
       const path: string = font.getPath(line, left, startY + paths.length * lineHeight, fontSize).toSVG(2).replace('<path', '<path class="text"');
       paths.push(path);
 
   }
 
-  let lastPosition = 0;
+  // let position: number;
+  // const words: string[] = [];
+
+  // let lastValidBreak = 0;
+  // while (position =  breaker.nextBreak()?.position) {
+  //   words.push(text.slice(lastValidBreak, position));
+  //   lastValidBreak = position;
+  // }
+
+  // let line = "";
+  // while (words.length) {
+  //   const newLine = line + words[0];
+  //   const newLineWidth = font.getAdvanceWidth(newLine, fontSize);
+  //   if (newLineWidth > width) {
+  //     addPath(line.trim());
+  //     line = "";
+  //   }
+  //   else {
+  //     words.shift();
+  //     line = newLine;
+  //   }
+  // }
+  // if (line.trim()) {
+  //   addPath(line.trim());
+  // }
+
+  let position: number | undefined;
   let lastValidBreak = 0;
-  let currentWidth = 0;
-  let position: number;
-
-  while (position = breaker.nextBreak()?.position) {
-      const substring = text.slice(lastPosition, position); // Using slice instead of substring
-      currentWidth = font.getAdvanceWidth(substring, fontSize);
-
-      if (currentWidth > width) {
-          // If we've exceeded the max width, split at the last valid break point
-          // and reset the lastPosition and currentWidth to start from the last valid break
-          if (lastValidBreak === lastPosition) { // Handle case where a single segment exceeds maxWidth
-              addPath(substring); // Add the oversized segment as is or handle differently
-              lastPosition = position; // Move past this segment
-          } else {
-              addPath(text.slice(lastPosition, lastValidBreak));
-              lastPosition = lastValidBreak; // Start next part from the last valid break
-              continue; // Skip the increment to reevaluate the width from the last valid break
-          }
-      }
-
-      lastValidBreak = position; // Update last valid break to current position
+  let line: string = "";
+  
+  // Assuming the `breaker` interface and method implementation are defined elsewhere
+  while ((position = breaker.nextBreak()?.position) !== undefined) {
+    const word = text.slice(lastValidBreak, position);
+    const newLine = line + word; // Adds a space between words, but not at the start
+    const newLineWidth = font.getAdvanceWidth(newLine.trim(), fontSize);
+  
+    if (newLineWidth > width && line) {
+      addPath(line.trim());
+      line = word; // Start a new line with the current word
+    } else {
+      line = newLine; // Add the word to the current line
+    }
+  
+    lastValidBreak = position;
+  }
+  
+  // Handle the last line if it has content
+  if (line.trim()) {
+    addPath(line.trim());
   }
 
-  // Add the last part if there's any remaining text
-  if (lastPosition < text.length) {
-      addPath(text.slice(lastPosition));
-  }
+
+
+  // let lastPosition = 0;
+  // let currentWidth = 0;
+
+  // while (position =  breaker.nextBreak()?.position) {
+  //     const substring = text.slice(lastPosition, position); // Using slice instead of substring
+  //     currentWidth = font.getAdvanceWidth(substring, fontSize);
+  //     console.log(substring, " -> ", currentWidth)
+
+  //     if (currentWidth > width) {
+  //         // If we've exceeded the max width, split at the last valid break point
+  //         // and reset the lastPosition and currentWidth to start from the last valid break
+  //         if (lastValidBreak === lastPosition) { // Handle case where a single segment exceeds maxWidth
+  //             addPath(substring); // Add the oversized segment as is or handle differently
+  //             lastPosition = position; // Move past this segment
+  //         } else {
+  //             addPath(text.slice(lastPosition, lastValidBreak));
+  //             lastPosition = lastValidBreak; // Start next part from the last valid break
+  //             continue; // Skip the increment to reevaluate the width from the last valid break
+  //         }
+  //     }
+
+  //     lastValidBreak = position; // Update last valid break to current position
+  // }
+
+  // // Add the last part if there's any remaining text
+  // if (lastPosition < text.length) {
+  //     addPath(text.slice(lastPosition));
+  // }
 
   console.log(paths.length);
 
@@ -117,6 +170,8 @@ async function renderText(text: string, fontName: string, fontSize: number, line
 async function buildSvg(text: string, width: number, options: TextBoxOptions) {
   const boxWidth = width - (options.marginX || 0) * 2;
   const textWidth = boxWidth - (options.paddingX || 0) * 2;
+
+  console.log("textWidth", textWidth)
   const boxLeft = (options.marginX || 0);
   const boxTop = (options.marginY || 0);
   const textLeft = boxLeft + (options.paddingX || 0);
@@ -160,14 +215,14 @@ async function buildSvg(text: string, width: number, options: TextBoxOptions) {
   };
 }
 
-async function renderTextBox(image: sharp.Sharp, text: string, options: TextBoxOptions) {
+async function renderTextBox(image: sharp.Sharp, text: string, customization: any, options: TextBoxOptions) {
   const [imageWidth, imageHeight] = await image.metadata().then(m => [m.width!, m.height!]);
   console.log("size." , imageWidth," x ", imageHeight);
 
   const width = Math.trunc(imageWidth / options.width);
   console.log("width: ", width);
 
-  const { svg, height } = await buildSvg(text, width, options);
+  const { svg, height } = await buildSvg(applyCustomization(text, customization), width, options);
 
   let top, left;
 
@@ -188,18 +243,29 @@ async function renderTextBox(image: sharp.Sharp, text: string, options: TextBoxO
 }
 
 
+function applyCustomization(template: string, customization: any) {
+  const temp = parse(template);
+  return temp(customization);
+}
+
+const cust = {
+  child: {
+    parameters: {
+      name: "Johannes",
+    }
+  }
+};
+
 (async () => {
 
-  const image = sharp("/Users/tiberius/ai/img/bst_4/fireman_gross.png");
+  const image = sharp("/Users/tiberius/ai/img/bst_4/fireman_klein.png");
   //const image = await sharp("/Users/tiberius/ai/img/bst_4/tina_arielle.png");
   
-  const buffer = renderTextBox(image, "Dies ist ein neuer Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überaupt etwas passgjyiert...", {
+  const buffer = renderTextBox(image, "Welcome to the beach, {{child.parameters.name}}!", cust, {
     position: "SE",
-    width: 2,
+    width: 3,
 //    fontName: "Roboto/Roboto-Regular.ttf",
     fontName: "KMKDSP__.ttf",
-    fontSize: 96,
-    lineHeight: 124,
     defs: `
       <radialGradient id="0" cx="50%" cy="50%" r="50%" >
         <stop offset="0%" style="stop-color:rgb(245,230,147);stop-opacity:1.00" />
@@ -207,13 +273,15 @@ async function renderTextBox(image: sharp.Sharp, text: string, options: TextBoxO
         <stop offset="80%" style="stop-color:rgb(227,204,92);stop-opacity:1.00" />
       </radialGradient> 
     `.trim(),
-    styleBox: "stroke: #000000; filter: drop-shadow( 10px 10px 8px rgba(0, 0, 0, .5)); fill: url(#0); rx:10; ry:10;",
+    fontSize: 16,
+    lineHeight: 20,
+    styleBox: "stroke: #000000; filter: drop-shadow( 3px 3px 2px rgba(0, 0, 0, .5)); fill: url(#0); rx:3; ry:3;",
     styleText: "fill: black",
-    paddingX: 48,
-    paddingY: 48,
-    marginX: 64,
-    marginY: 64
-  });
+    paddingX: 10,
+    paddingY: 10,
+    marginX: 10,
+    marginY: 10,
+    });
   
   
   // renderTextBox("Dies ist ein Test. (Ich bin mal gespannt, wie der umgebrochen wird.) Und ob überaupt etwas passgjyiert...", {
